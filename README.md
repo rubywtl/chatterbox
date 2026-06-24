@@ -1,6 +1,7 @@
-<img src="assets/img/speech_agent_logo_v2.svg" width="60" align="left"> ChatterBox: Your Personal Speech Agent
+<img src="assets/img/speech_agent_logo_v2.svg" width="60" align="left"> 
+# ChatterBox: Your Personal Speech Agent
 
-A local, open-source, full-duplex speech agent built from scratch in Python — no agent
+A local, open-source speech agent built from scratch in Python — no agent
 framework dependency. Every model is called directly:
 
 - **Turn-taking**: [Smart Turn v3](https://huggingface.co/pipecat-ai/smart-turn-v3) (open-source ONNX model, run via `onnxruntime`) decides when the user has actually finished speaking, layered on top of a fast frame-level VAD (`webrtcvad`).
