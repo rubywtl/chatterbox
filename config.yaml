@@ -1,0 +1,65 @@
+# chatterbox speech agent configuration
+#
+# Every model name, endpoint, and streaming/buffering size the agent uses
+# lives here. No framework config files elsewhere — this is the single
+# source of truth.
+
+audio:
+  input_sample_rate: 16000      # required by VAD, Smart Turn, and Whisper
+  input_channels: 1
+  frame_ms: 30                  # mic capture frame size in ms (webrtcvad requires 10/20/30)
+  output_sample_rate: 24000     # Kokoro's native output rate
+  output_channels: 1
+  output_chunk_frames: 1024     # samples per playback buffer write (latency vs. underrun tradeoff)
+  input_device: null            # sounddevice device index/name, null = system default
+  output_device: null
+
+vad:
+  backend: webrtcvad
+  aggressiveness: 2             # 0-3, higher = more aggressive at filtering non-speech
+  speech_start_frames: 3        # consecutive speech frames to confirm "user started talking"
+  silence_hold_ms: 400          # consecutive silence before we consider running turn detection
+  hard_timeout_ms: 3000         # force end-of-turn this long after silence even if model is unsure
+  recheck_ms: 200               # re-run the (more expensive) Smart Turn model at most this often during silence
+
+turn_taking:
+  model_repo: pipecat-ai/smart-turn-v3
+  model_file: smart-turn-v3.2-cpu.onnx   # swap to *-gpu.onnx if running with CUDA
+  window_seconds: 8             # max trailing audio window fed to the model
+  endpoint_threshold: 0.5       # probability above which a pause is treated as end-of-turn
+  device: cpu                   # cpu | cuda (onnxruntime execution provider selection)
+
+stt:
+  engine: faster-whisper
+  model_size: small.en
+  device: cpu
+  compute_type: int8
+  language: en
+  beam_size: 1                  # 1 = greedy decoding, lowest latency
+
+llm:
+  provider: ollama
+  base_url: http://localhost:11434
+  model: llama3.1:8b
+  system_prompt: "You are a concise, friendly voice assistant. Keep replies short and conversational."
+  temperature: 0.7
+  max_tokens: 512
+  request_timeout_s: 60
+  sentence_chunk_chars: 40       # min buffered chars before flushing a sentence to TTS
+  sentence_boundary_chars: ".?!\n"
+
+tts:
+  engine: kokoro
+  repo_id: hexgrad/Kokoro-82M
+  lang_code: a                  # 'a' = American English
+  voice: af_heart
+  speed: 1.0
+  sample_rate: 24000
+  streaming_chunk_samples: 4096  # samples per audio chunk pushed to the playback queue
+
+barge_in:
+  enabled: true                 # let the user interrupt the agent mid-sentence
+  min_speech_frames_to_interrupt: 3
+
+logging:
+  level: INFO

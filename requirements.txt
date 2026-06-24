@@ -1,0 +1,11 @@
+numpy
+sounddevice
+webrtcvad
+onnxruntime
+transformers
+huggingface_hub
+faster-whisper
+httpx
+kokoro>=0.9.4
+soundfile
+pyyaml
