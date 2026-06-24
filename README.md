@@ -1,4 +1,5 @@
-<img src="assets/img/speech_agent_logo_v2_w_text.svg" width="60" align="center"> 
+<img src="assets/img/speech_agent_logo_v2_w_text.svg" width="300" align="center"> 
+
 ## Your Personal Speech Agent
 
 A local, open-source speech agent built from scratch in Python — no agent
