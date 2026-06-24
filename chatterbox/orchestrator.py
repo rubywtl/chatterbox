@@ -61,19 +61,44 @@ class Agent:
     No external agent framework involved — every model is called directly.
     """
 
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        mic=None,
+        speaker=None,
+        turn_detector: SmartTurnDetector | None = None,
+        stt: WhisperTranscriber | None = None,
+        tts: KokoroSynthesizer | None = None,
+    ):
+        """`mic`/`speaker`/`turn_detector`/`stt`/`tts` are injectable so a
+        server process can load the heavy models once and reuse them across
+        sessions, and swap local audio I/O for network-backed I/O (see
+        web_audio.py) when the mic/speaker live on a remote browser tab.
+        """
         self.config = config
-        self.mic = MicStream(config.audio)
-        self.speaker = SpeakerStream(config.audio)
+        self.mic = mic if mic is not None else MicStream(config.audio)
+        self.speaker = speaker if speaker is not None else SpeakerStream(config.audio)
         self.frame_vad = FrameVad(config.audio, config.vad)
 
-        logger.info("Loading Smart Turn v3 (%s)...", config.turn_taking.model_file)
-        self.turn_detector = SmartTurnDetector(config.turn_taking)
-        logger.info("Loading faster-whisper (%s)...", config.stt.model_size)
-        self.stt = WhisperTranscriber(config.stt)
-        self.llm = OllamaClient(config.llm)
-        logger.info("Loading Kokoro (%s)...", config.tts.repo_id)
-        self.tts = KokoroSynthesizer(config.tts)
+        if turn_detector is not None:
+            self.turn_detector = turn_detector
+        else:
+            logger.info("Loading Smart Turn v3 (%s)...", config.turn_taking.model_file)
+            self.turn_detector = SmartTurnDetector(config.turn_taking)
+
+        if stt is not None:
+            self.stt = stt
+        else:
+            logger.info("Loading faster-whisper (%s)...", config.stt.model_size)
+            self.stt = WhisperTranscriber(config.stt)
+
+        self.llm = OllamaClient(config.llm)  # per-session chat history, always fresh
+
+        if tts is not None:
+            self.tts = tts
+        else:
+            logger.info("Loading Kokoro (%s)...", config.tts.repo_id)
+            self.tts = KokoroSynthesizer(config.tts)
 
         self.state = State.IDLE
         self._utterance_frames: list[np.ndarray] = []
@@ -107,7 +132,7 @@ class Agent:
                 await self._response_task
             except asyncio.CancelledError:
                 pass
-        self.speaker.clear()
+        await self.speaker.clear()
 
     async def _handle_frame(self, frame: np.ndarray) -> None:
         is_speech = self.frame_vad.is_speech(frame)
@@ -175,14 +200,16 @@ class Agent:
                 self.state = State.IDLE
                 return
             logger.info("user: %s", text)
+            await self.speaker.send_transcript("user", text)
 
             spoke_any = False
             async for sentence in self.llm.stream_sentences(text):
                 logger.info("agent: %s", sentence)
+                await self.speaker.send_transcript("agent", sentence)
                 async for chunk in _iter_in_thread(lambda s=sentence: self.tts.synthesize_chunks(s)):
                     spoke_any = True
                     self.state = State.AGENT_SPEAKING
-                    self.speaker.write(chunk)
+                    await self.speaker.write(chunk)
 
             if not spoke_any:
                 self.state = State.IDLE

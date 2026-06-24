@@ -5,9 +5,13 @@ import queue
 import threading
 
 import numpy as np
-import sounddevice as sd
 
 from .config import AudioConfig
+
+# sounddevice (PortAudio) is only imported lazily, inside start(), so that
+# importing this module — which orchestrator.py always does — doesn't
+# require PortAudio to be installed on machines that never touch local
+# audio, e.g. a headless server using the network-backed streams instead.
 
 
 class MicStream:
@@ -32,6 +36,8 @@ class MicStream:
         self._loop.call_soon_threadsafe(self._queue.put_nowait, frame)
 
     def start(self) -> None:
+        import sounddevice as sd
+
         self._loop = asyncio.get_event_loop()
         self._stream = sd.InputStream(
             samplerate=self._config.input_sample_rate,
@@ -86,6 +92,8 @@ class SpeakerStream:
         outdata[:, 0] = out
 
     def start(self) -> None:
+        import sounddevice as sd
+
         self._stream = sd.OutputStream(
             samplerate=self._config.output_sample_rate,
             channels=self._config.output_channels,
@@ -102,12 +110,12 @@ class SpeakerStream:
             self._stream.close()
             self._stream = None
 
-    def write(self, chunk: np.ndarray) -> None:
+    async def write(self, chunk: np.ndarray) -> None:
         self._queue.put(chunk)
         with self._lock:
             self.is_playing = True
 
-    def clear(self) -> None:
+    async def clear(self) -> None:
         """Drop all queued/buffered audio immediately (barge-in)."""
         with self._lock:
             self._leftover = np.zeros(0, dtype=np.int16)
@@ -121,3 +129,6 @@ class SpeakerStream:
     def drained(self) -> bool:
         with self._lock:
             return self._leftover.shape[0] == 0 and self._queue.empty()
+
+    async def send_transcript(self, role: str, text: str) -> None:
+        pass  # no display surface for local mic/speaker mode

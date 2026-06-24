@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>chatterbox</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; }
+  #status { font-weight: 600; margin-bottom: 1rem; }
+  #log { white-space: pre-wrap; line-height: 1.5; border-top: 1px solid #ccc; padding-top: 1rem; }
+  #log .user { color: #1a4; }
+  #log .agent { color: #145; }
+  button { font-size: 1rem; padding: 0.5rem 1.25rem; }
+</style>
+</head>
+<body>
+  <h1>chatterbox</h1>
+  <button id="start">Start talking</button>
+  <div id="status">not connected</div>
+  <div id="log"></div>
+
+<script>
+const WS_PORT = new URLSearchParams(location.search).get("ws_port") || 8765;
+
+let ws, config, micCtx, outCtx, nextPlayTime = 0;
+let scheduledSources = [];
+
+function setStatus(text) { document.getElementById("status").textContent = text; }
+
+function appendLog(role, text) {
+  const log = document.getElementById("log");
+  const line = document.createElement("div");
+  line.className = role;
+  line.textContent = (role === "user" ? "you: " : "agent: ") + text;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function playChunk(buffer) {
+  const int16 = new Int16Array(buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+  const audioBuffer = outCtx.createBuffer(1, float32.length, config.output_sample_rate);
+  audioBuffer.copyToChannel(float32, 0);
+
+  const src = outCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(outCtx.destination);
+
+  const startAt = Math.max(nextPlayTime, outCtx.currentTime);
+  src.start(startAt);
+  nextPlayTime = startAt + audioBuffer.duration;
+  scheduledSources.push(src);
+  setStatus("agent speaking");
+}
+
+function clearPlayback() {
+  for (const src of scheduledSources) {
+    try { src.stop(); } catch (e) { /* already finished */ }
+  }
+  scheduledSources = [];
+  nextPlayTime = outCtx.currentTime;
+}
+
+async function setupMic() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+  micCtx = new AudioContext({ sampleRate: config.input_sample_rate });
+  const source = micCtx.createMediaStreamSource(stream);
+
+  const frameSamples = Math.round(config.input_sample_rate * config.frame_ms / 1000);
+  const workletSrc = `
+    class Framer extends AudioWorkletProcessor {
+      constructor(opts) {
+        super();
+        this.frameSamples = opts.processorOptions.frameSamples;
+        this.buf = [];
+      }
+      process(inputs) {
+        const input = inputs[0][0];
+        if (input) {
+          for (let i = 0; i < input.length; i++) this.buf.push(input[i]);
+          while (this.buf.length >= this.frameSamples) {
+            const frame = this.buf.splice(0, this.frameSamples);
+            const int16 = new Int16Array(frame.length);
+            for (let i = 0; i < frame.length; i++) {
+              const s = Math.max(-1, Math.min(1, frame[i]));
+              int16[i] = s < 0 ? s * 32768 : s * 32767;
+            }
+            this.port.postMessage(int16.buffer, [int16.buffer]);
+          }
+        }
+        return true;
+      }
+    }
+    registerProcessor("framer", Framer);
+  `;
+  const blobUrl = URL.createObjectURL(new Blob([workletSrc], { type: "application/javascript" }));
+  await micCtx.audioWorklet.addModule(blobUrl);
+
+  const framer = new AudioWorkletNode(micCtx, "framer", {
+    processorOptions: { frameSamples },
+  });
+  framer.port.onmessage = (event) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(event.data);
+  };
+  source.connect(framer);
+
+  // AudioWorkletNodes only keep processing while reachable from an active
+  // graph; route to destination through a silent gain node instead of
+  // leaving it unconnected.
+  const silence = micCtx.createGain();
+  silence.gain.value = 0;
+  framer.connect(silence);
+  silence.connect(micCtx.destination);
+}
+
+function onMessage(event) {
+  if (typeof event.data === "string") {
+    const msg = JSON.parse(event.data);
+    if (msg.type === "clear") {
+      clearPlayback();
+    } else if (msg.type === "transcript") {
+      appendLog(msg.role, msg.text);
+    }
+    return;
+  }
+  playChunk(event.data);
+}
+
+async function start() {
+  document.getElementById("start").disabled = true;
+  setStatus("connecting...");
+  ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}/`);
+  ws.binaryType = "arraybuffer";
+
+  ws.onmessage = async (event) => {
+    if (!config) {
+      config = JSON.parse(event.data);
+      outCtx = new AudioContext({ sampleRate: config.output_sample_rate });
+      nextPlayTime = outCtx.currentTime;
+      await setupMic();
+      setStatus("listening");
+      return;
+    }
+    onMessage(event);
+  };
+  ws.onclose = () => setStatus("disconnected");
+  ws.onerror = () => setStatus("connection error");
+}
+
+document.getElementById("start").addEventListener("click", start);
+</script>
+</body>
+</html>
