@@ -1,5 +1,5 @@
-<img src="assets/img/speech_agent_logo_v2.svg" width="60" align="left"> 
-# ChatterBox: Your Personal Speech Agent
+<img src="assets/img/speech_agent_logo_v2_w_text.svg" width="60" align="center"> 
+## Your Personal Speech Agent
 
 A local, open-source speech agent built from scratch in Python — no agent
 framework dependency. Every model is called directly:
